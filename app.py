@@ -3,6 +3,7 @@
 import streamlit as st
 import requests
 import json
+import os
 import time
 import requests_cache
 from datetime import datetime
@@ -11,7 +12,8 @@ from datetime import datetime
 requests_cache.install_cache('zhihu_cache', expire_after=600)
 
 # ================== 请替换成你的真实 App_Key ==================
-APP_KEY = "51e9514d29dd9183351e5b968793a27e65fa6fb6"
+# 建议通过环境变量 ZHIHU_APP_KEY 配置，避免将密钥硬编码在源码中（生产环境请勿使用默认值）
+APP_KEY = os.environ.get("ZHIHU_APP_KEY", "51e9514d29dd9183351e5b968793a27e65fa6fb6")
 # =============================================================
 
 # ---------- 模拟模式开关 ----------
@@ -733,9 +735,12 @@ def main():
                     st.session_state.topic = topic
                     item_count = len(results.get("data", []))
                     st.success(f"找到 {item_count} 条相关内容（已应用质量筛选）")
-                    if "pro_args" in st.session_state:
-                        del st.session_state.pro_args
-                        del st.session_state.con_args
+                    # 更换辩题后清空上一场辩论的全部状态，避免立场/回合/论据残留
+                    for key in ("pro_args", "con_args", "stance", "opponent_stance",
+                                "opponent_args", "round", "history", "messages",
+                                "waiting_for_first_speech", "debate_style",
+                                "timer_start", "timer_expired", "quick_input"):
+                        st.session_state.pop(key, None)
                 else:
                     st.warning("未获取到数据，请检查网络或 App_Key")
 
@@ -782,25 +787,39 @@ def main():
     st.markdown('<div class="step-header">第三步：开始辩论</div>', unsafe_allow_html=True)
 
     with st.container():
-        stance = st.radio("选择你的立场：", ["正方", "反方"], horizontal=True)
+        # 辩论一旦开始即锁定立场：AI 立场始终与用户“初始立场”相反，之后不再改变
+        debate_started = "messages" in st.session_state
 
-        if st.button("开始辩论", type="primary"):
-            opponent_stance = "反方" if stance == "正方" else "正方"
-            opponent_args = con_args if stance == "正方" else pro_args
+        if debate_started:
+            st.info(
+                f"✅ 立场已锁定：你选择「{st.session_state.stance}」，"
+                f"AI 固定为「{st.session_state.opponent_stance}」（与你初始立场相反，不随立场变化而改变）。"
+            )
+        else:
+            stance = st.radio(
+                "选择你的立场：",
+                ["正方", "反方"],
+                horizontal=True,
+                key="stance_choice",
+            )
 
-            st.session_state.stance = stance
-            st.session_state.opponent_stance = opponent_stance
-            st.session_state.opponent_args = opponent_args
-            st.session_state.round = 1
-            st.session_state.history = []
-            st.session_state.messages = []
-            st.session_state.waiting_for_first_speech = True
-            st.session_state.debate_style = selected_style
-            st.session_state.timer_seconds = timer_seconds
-            st.session_state.timer_enabled = timer_enabled
-            st.session_state.timer_start = None
-            st.session_state.timer_expired = False
-            st.rerun()
+            if st.button("开始辩论", type="primary"):
+                opponent_stance = "反方" if stance == "正方" else "正方"
+                opponent_args = con_args if stance == "正方" else pro_args
+
+                st.session_state.stance = stance
+                st.session_state.opponent_stance = opponent_stance
+                st.session_state.opponent_args = opponent_args
+                st.session_state.round = 1
+                st.session_state.history = []
+                st.session_state.messages = []
+                st.session_state.waiting_for_first_speech = True
+                st.session_state.debate_style = selected_style
+                st.session_state.timer_seconds = timer_seconds
+                st.session_state.timer_enabled = timer_enabled
+                st.session_state.timer_start = None
+                st.session_state.timer_expired = False
+                st.rerun()
 
     if "messages" not in st.session_state:
         return
