@@ -11,7 +11,7 @@ from datetime import datetime
 requests_cache.install_cache('zhihu_cache', expire_after=600)
 
 # ================== 请替换成你的真实 App_Key ==================
-APP_KEY = "51e9514d29dd9183351e5b968793a27e65fa6fb6"
+APP_KEY = ""
 # =============================================================
 
 # ---------- 模拟模式开关 ----------
