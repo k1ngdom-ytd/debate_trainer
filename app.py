@@ -16,7 +16,7 @@ import streamlit as st
 APP_KEY = st.secrets.get("APP_KEY", "你的本地测试密钥")
 # =============================================================
 
-# ---------- 模拟模式开关 ----------
+# ---------- 模拟模式开关 （默认关闭，小白勿动）----------
 USE_MOCK = False
 # --------------------------------
 
@@ -47,9 +47,10 @@ DEBATE_STYLES = {
         "prompt_suffix": "语气理性严谨，注重逻辑链条的完整性，用严密的推理和事实数据说话，不掺杂情绪。"
     }
 }
-
-
 # ---------------------------------
+
+# 统一错误提示
+ERROR_MSG = "输入频率过快，请稍后再试"
 
 
 def call_zhihu_agent(prompt, retries=2):
@@ -107,21 +108,22 @@ def call_zhihu_agent(prompt, retries=2):
                     content = result["choices"][0]["message"].get("content", "")
                     if not content:
                         content = result["choices"][0]["message"].get("reasoning_content", "")
-                    return content if content else "API返回内容为空"
+                    if content:
+                        return content
+                    else:
+                        return ERROR_MSG
                 else:
-                    return f"API返回格式异常：{result}"
-            elif response.status_code == 429:
-                return "API调用频率超限，请明天再试。"
+                    return ERROR_MSG
             else:
-                return f"API调用失败：{response.status_code}，{response.text[:200]}"
+                return ERROR_MSG
         except requests.exceptions.Timeout:
             if attempt < retries:
                 time.sleep(2)
                 continue
             else:
-                return "请求超时，已重试2次仍失败，请检查网络。"
+                return ERROR_MSG
         except Exception as e:
-            return f"请求出错：{e}"
+            return ERROR_MSG
 
 
 def search_zhihu(query, min_authority=None, min_votes=None, min_comments=None):
@@ -145,14 +147,14 @@ def search_zhihu(query, min_authority=None, min_votes=None, min_comments=None):
             if result.get("Code") == 0:
                 data = result.get("Data", {})
                 items = data.get("Items", [])
-
+                
                 if min_authority or min_votes or min_comments:
                     filtered = []
                     for item in items:
                         authority = int(item.get("AuthorityLevel", 0))
                         votes = item.get("VoteUpCount", 0)
                         comments = item.get("CommentCount", 0)
-
+                        
                         if min_authority and authority < min_authority:
                             continue
                         if min_votes and votes < min_votes:
@@ -161,16 +163,16 @@ def search_zhihu(query, min_authority=None, min_votes=None, min_comments=None):
                             continue
                         filtered.append(item)
                     items = filtered
-
+                
                 return {"data": items}
             else:
-                st.error(f"搜索API返回错误：{result.get('Message', '未知错误')}")
+                st.error(ERROR_MSG)
                 return None
         else:
-            st.error(f"搜索API调用失败：{response.status_code}")
+            st.error(ERROR_MSG)
             return None
     except Exception as e:
-        st.error(f"搜索请求出错：{e}")
+        st.error(ERROR_MSG)
         return None
 
 
@@ -182,7 +184,7 @@ def get_hot_list(limit=10):
             {"Title": "考研人数下降说明了什么？"},
             {"Title": "996工作制是否应该被禁止？"},
         ]
-
+    
     url = "https://developer.zhihu.com/api/v1/content/hot_list"
     timestamp = str(int(time.time()))
     headers = {
@@ -191,7 +193,7 @@ def get_hot_list(limit=10):
         "X-Request-Timestamp": timestamp
     }
     params = {"Limit": min(limit, 30)}
-
+    
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
         response.encoding = "utf-8"
@@ -212,7 +214,7 @@ def get_user_followees():
     """获取关注列表"""
     if USE_MOCK:
         return [{"name": "张三", "follower_count": 1234}, {"name": "李四", "follower_count": 5678}]
-
+    
     url = "https://developer.zhihu.com/api/v1/user/followees"
     timestamp = str(int(time.time()))
     headers = {
@@ -240,7 +242,7 @@ def get_user_followers():
     """获取粉丝列表"""
     if USE_MOCK:
         return [{"name": "王五", "follower_count": 234}, {"name": "赵六", "follower_count": 789}]
-
+    
     url = "https://developer.zhihu.com/api/v1/user/followers"
     timestamp = str(int(time.time()))
     headers = {
@@ -311,6 +313,10 @@ def extract_arguments(search_results, topic):
 """
     result = call_zhihu_agent(prompt)
 
+    # 如果返回的是错误信息，直接返回
+    if result == ERROR_MSG:
+        return ERROR_MSG, ERROR_MSG
+
     pro_args = "（正方论据待提取）"
     con_args = "（反方论据待提取）"
     if "【正方论据】" in result and "【反方论据】" in result:
@@ -318,18 +324,25 @@ def extract_arguments(search_results, topic):
         if len(parts) >= 2:
             pro_part = parts[0].replace("【正方论据】", "").strip()
             con_part = parts[1].strip()
-            pro_args = pro_part if pro_part else "（暂无正方论据）"
-            con_args = con_part if con_part else "（暂无反方论据）"
+            pro_args = pro_part if pro_part else ERROR_MSG
+            con_args = con_part if con_part else ERROR_MSG
+        else:
+            pro_args = ERROR_MSG
+            con_args = ERROR_MSG
     else:
-        pro_args = result
-        con_args = "（请查看上方完整内容）"
+        pro_args = ERROR_MSG
+        con_args = ERROR_MSG
     return pro_args, con_args
 
 
 def generate_ai_reply(user_input, opponent_args, opponent_stance, topic, user_stance, style="逻辑严谨型"):
     """生成 AI 反击（支持风格选择）"""
-    style_prompt = DEBATE_STYLES.get(style, DEBATE_STYLES["逻辑严谨型"])["prompt_suffix"]
+    # 如果对手论据是错误信息，直接返回
+    if opponent_args == ERROR_MSG:
+        return ERROR_MSG
 
+    style_prompt = DEBATE_STYLES.get(style, DEBATE_STYLES["逻辑严谨型"])["prompt_suffix"]
+    
     prompt = f"""
 你是一名辩论对手，你的立场是「{opponent_stance}」（与用户相反）。
 你方（{opponent_stance}）拥有的论据库如下（你必须使用这些论据来反驳用户）：
@@ -347,6 +360,8 @@ def generate_ai_reply(user_input, opponent_args, opponent_stance, topic, user_st
 - {style_prompt}
 """
     result = call_zhihu_agent(prompt)
+    if result == ERROR_MSG:
+        return ERROR_MSG
     if len(result) > 100:
         result = result[:100] + "..."
     return result
@@ -354,8 +369,11 @@ def generate_ai_reply(user_input, opponent_args, opponent_stance, topic, user_st
 
 def generate_quick_replies(user_input, opponent_args, opponent_stance, topic, user_stance, style="逻辑严谨型"):
     """生成快捷回复建议"""
-    style_prompt = DEBATE_STYLES.get(style, DEBATE_STYLES["逻辑严谨型"])["prompt_suffix"]
+    if opponent_args == ERROR_MSG:
+        return [ERROR_MSG, ERROR_MSG, ERROR_MSG]
 
+    style_prompt = DEBATE_STYLES.get(style, DEBATE_STYLES["逻辑严谨型"])["prompt_suffix"]
+    
     prompt = f"""
 你是一名辩论助手。用户正在和AI进行辩论，用户刚才的发言是：
 {user_input}
@@ -371,6 +389,9 @@ def generate_quick_replies(user_input, opponent_args, opponent_stance, topic, us
 - {style_prompt}
 """
     result = call_zhihu_agent(prompt)
+    if result == ERROR_MSG:
+        return [ERROR_MSG, ERROR_MSG, ERROR_MSG]
+    
     lines = result.strip().split("\n")
     replies = []
     for line in lines:
@@ -415,6 +436,8 @@ def generate_report(history, topic):
 （给出具体的改进建议，100字以内）
 """
     result = call_zhihu_agent(prompt)
+    if result == ERROR_MSG:
+        return ERROR_MSG
     return result
 
 
@@ -424,12 +447,12 @@ def generate_report(history, topic):
 
 def main():
     st.set_page_config(
-        page_title="观点辩论训练 - 知乎黑客松",
+        page_title="观点辩论训练 - 知乎黑客松", 
         layout="wide",
         initial_sidebar_state="expanded"
     )
-
-    # ----- 自定义CSS（全面美化） -----
+    
+    # ----- 自定义CSS（美化排版 + 修复手机端换行） -----
     st.markdown("""
     <style>
         /* 全局字体和背景 */
@@ -437,7 +460,7 @@ def main():
             background: linear-gradient(135deg, #f0f2f6 0%, #e8ecf1 100%);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
-
+        
         /* 主标题 */
         .main-title {
             font-size: 2.8rem;
@@ -454,7 +477,7 @@ def main():
             padding-bottom: 1rem;
             margin-bottom: 1.5rem;
         }
-
+        
         /* 步骤标题 */
         .step-header {
             font-size: 1.3rem;
@@ -467,7 +490,7 @@ def main():
             margin-bottom: 1rem;
             box-shadow: 0 1px 3px rgba(0,0,0,0.06);
         }
-
+        
         /* 卡片容器 */
         .card {
             background: white;
@@ -477,7 +500,7 @@ def main():
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
             border: 1px solid rgba(0,0,0,0.04);
         }
-
+        
         /* 按钮统一风格 */
         .stButton > button {
             border-radius: 8px;
@@ -496,16 +519,7 @@ def main():
         .stButton > button:active {
             transform: translateY(0px);
         }
-        /* 次要按钮（如示例辩题） */
-        .stButton > button[kind="secondary"] {
-            background: #f0f2f6;
-            color: #333;
-            border: 1px solid #d0d0d0;
-        }
-        .stButton > button[kind="secondary"]:hover {
-            background: #e4e7ec;
-        }
-
+        
         /* 侧边栏优化 */
         .css-1d391kg, .css-1lcbmhc {
             background: white;
@@ -520,7 +534,7 @@ def main():
             padding: 0.6rem 0.8rem;
             margin-bottom: 0.8rem;
         }
-
+        
         /* 子标题 */
         .section-label {
             font-size: 0.9rem;
@@ -528,7 +542,7 @@ def main():
             color: #444;
             margin-bottom: 0.3rem;
         }
-
+        
         /* 计时器 */
         .timer-safe {
             font-size: 1.2rem;
@@ -545,48 +559,74 @@ def main():
             from { opacity: 1; }
             to { opacity: 0.4; }
         }
-
-        /* 论据卡片 */
+        
+        /* ===== 修复手机端论据不换行 ===== */
         .argument-card {
             background: #f8f9fb;
             border-radius: 10px;
             padding: 1rem 1.2rem;
             border-left: 3px solid #0066cc;
             margin: 0.5rem 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            max-width: 100%;
         }
         .argument-card-con {
             border-left-color: #cc6600;
         }
-
+        /* 确保所有文本内容都能正常换行 */
+        .argument-card p,
+        .argument-card div,
+        .argument-card span {
+            white-space: pre-wrap !important;
+            word-wrap: break-word !important;
+            word-break: break-word !important;
+            overflow-wrap: break-word !important;
+            max-width: 100% !important;
+        }
+        /* 修复Streamlit自带的markdown容器换行 */
+        .stMarkdown {
+            max-width: 100%;
+        }
+        .stMarkdown div {
+            white-space: pre-wrap !important;
+            word-wrap: break-word !important;
+            word-break: break-word !important;
+            overflow-wrap: break-word !important;
+            max-width: 100% !important;
+        }
+        
         /* 消息气泡 */
         .stChatMessage {
             border-radius: 12px !important;
             box-shadow: 0 1px 4px rgba(0,0,0,0.06);
         }
-
+        
         /* 分割线 */
         hr {
             margin: 1.2rem 0;
             border: none;
             border-top: 1px solid #e8ecf1;
         }
-
+        
         /* 选择框和输入框 */
         .stSelectbox, .stTextInput, .stNumberInput {
             border-radius: 8px;
         }
-
+        
         /* 滑块 */
         .stSlider {
             padding-top: 0.3rem;
         }
-
+        
         /* 成功/警告/信息提示 */
         .stAlert {
             border-radius: 8px;
             border: none;
         }
-
+        
         /* 底部版权 */
         .footer {
             text-align: center;
@@ -596,6 +636,21 @@ def main():
             border-top: 1px solid #e8ecf1;
             margin-top: 2rem;
         }
+
+        /* 手机端适配 */
+        @media (max-width: 768px) {
+            .main-title {
+                font-size: 1.8rem;
+            }
+            .step-header {
+                font-size: 1.0rem;
+                padding: 0.4rem 0.8rem;
+            }
+            .argument-card {
+                padding: 0.6rem 0.8rem;
+                font-size: 0.9rem;
+            }
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -603,23 +658,18 @@ def main():
     # 标题区
     # ========================================
     st.markdown('<div class="main-title">观点辩论训练</div>', unsafe_allow_html=True)
-    st.markdown('<div class="main-subtitle">基于知乎真实讨论，AI 陪你练辩论 ｜ 知乎黑客松 2026 · 知识炼金场</div>',
-                unsafe_allow_html=True)
+    st.markdown('<div class="main-subtitle">基于知乎真实讨论，AI 陪你练辩论 ｜ 知乎黑客松 2026 · 知识炼金场</div>', unsafe_allow_html=True)
 
     # ========================================
     # 侧边栏
     # ========================================
     with st.sidebar:
-        # GIF头像
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.image(DEFAULT_GIF, width=200)
-        st.markdown(
-            '<p style="text-align:center; color:#666; font-size:0.9rem; margin-top:-0.2rem;">你的AI辩论陪练</p>',
-            unsafe_allow_html=True)
+        st.markdown('<p style="text-align:center; color:#666; font-size:0.9rem; margin-top:-0.2rem;">你的AI辩论陪练</p>', unsafe_allow_html=True)
         st.divider()
 
-        # AI风格选择
         st.markdown('<div class="section-label">AI辩论风格</div>', unsafe_allow_html=True)
         selected_style = st.selectbox(
             "选择AI对手的风格",
@@ -630,20 +680,17 @@ def main():
         st.caption(DEBATE_STYLES[selected_style]["description"])
         st.divider()
 
-        # 内容质量筛选
         st.markdown('<div class="section-label">内容质量筛选</div>', unsafe_allow_html=True)
         min_authority = st.slider("最低权威等级 (1-4)", min_value=0, max_value=4, value=0)
         min_votes = st.number_input("最低赞同数", min_value=0, value=0, step=10)
         min_comments = st.number_input("最低评论数", min_value=0, value=0, step=5)
         st.divider()
 
-        # 计时器设置
         st.markdown('<div class="section-label">计时器设置</div>', unsafe_allow_html=True)
         timer_seconds = st.slider("每回合限时（秒）", min_value=30, max_value=180, value=60, step=10)
         timer_enabled = st.checkbox("启用计时器", value=True)
         st.divider()
 
-        # 社交关系
         st.markdown('<div class="section-label">社交关系</div>', unsafe_allow_html=True)
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -677,9 +724,8 @@ def main():
     # 第一步：输入辩题
     # ========================================
     st.markdown('<div class="step-header">第一步：输入辩题</div>', unsafe_allow_html=True)
-
+    
     with st.container():
-        # 热点话题
         with st.expander("热点话题（点击生成辩题）"):
             with st.spinner("加载热榜..."):
                 hot_items = get_hot_list(10)
@@ -695,7 +741,6 @@ def main():
             else:
                 st.info("暂无可用的热点话题")
 
-        # 示例辩题
         st.markdown("**快速选择示例辩题：**")
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -708,24 +753,23 @@ def main():
             if st.button("996是奋斗还是剥削？", use_container_width=True):
                 st.session_state.topic = "996工作制是奋斗还是剥削"
 
-        # 自定义输入
         col_input, col_btn = st.columns([4, 1])
         with col_input:
             topic = st.text_input(
-                "或输入自定义辩题：",
+                "或输入自定义辩题：", 
                 value=st.session_state.get("topic", ""),
                 label_visibility="collapsed",
                 placeholder="输入你的辩题..."
             )
         with col_btn:
-            st.write("")  # 占位对齐
-            st.write("")  # 占位对齐
+            st.write("")
+            st.write("")
             search_clicked = st.button("搜索", type="primary", use_container_width=True)
 
         if search_clicked and topic:
             with st.spinner("正在搜索知乎相关内容..."):
                 results = search_zhihu(
-                    topic,
+                    topic, 
                     min_authority=min_authority if min_authority > 0 else None,
                     min_votes=min_votes if min_votes > 0 else None,
                     min_comments=min_comments if min_comments > 0 else None
@@ -734,22 +778,25 @@ def main():
                     st.session_state.search_results = results
                     st.session_state.topic = topic
                     item_count = len(results.get("data", []))
-                    st.success(f"找到 {item_count} 条相关内容（已应用质量筛选）")
+                    if item_count > 0:
+                        st.success(f"找到 {item_count} 条相关内容（已应用质量筛选）")
+                    else:
+                        st.warning("未找到相关内容，请尝试其他关键词")
                     if "pro_args" in st.session_state:
                         del st.session_state.pro_args
                         del st.session_state.con_args
                 else:
-                    st.warning("未获取到数据，请检查网络或 App_Key")
+                    st.error(ERROR_MSG)
 
     if "search_results" not in st.session_state:
         st.info("请输入辩题后点击「搜索」开始")
         return
 
     # ========================================
-    # 第二步：弹药库
+    # 第二步：弹药库（已删除括号内容）
     # ========================================
-    st.markdown('<div class="step-header">第二步：弹药库（从知乎提炼的论据）</div>', unsafe_allow_html=True)
-
+    st.markdown('<div class="step-header">第二步：弹药库</div>', unsafe_allow_html=True)
+    
     with st.container():
         filter_info = []
         if min_authority > 0:
@@ -782,7 +829,7 @@ def main():
     # 第三步：开始辩论
     # ========================================
     st.markdown('<div class="step-header">第三步：开始辩论</div>', unsafe_allow_html=True)
-
+    
     with st.container():
         stance = st.radio("选择你的立场：", ["正方", "反方"], horizontal=True)
 
@@ -810,14 +857,13 @@ def main():
     # ========================================
     # 第四步：辩论进行中
     # ========================================
-    # 计时器
     if st.session_state.get("timer_enabled", False) and not st.session_state.get("waiting_for_first_speech", False):
         if st.session_state.get("timer_start") is None:
             st.session_state.timer_start = time.time()
-
+        
         elapsed = time.time() - st.session_state.timer_start
         remaining = max(0, st.session_state.timer_seconds - elapsed)
-
+        
         if remaining <= 0 and not st.session_state.get("timer_expired", False):
             st.session_state.timer_expired = True
             st.warning("时间到！本轮结束，进入下一回合。")
@@ -825,30 +871,28 @@ def main():
             st.session_state.timer_start = None
             st.session_state.timer_expired = False
             st.rerun()
-
+        
         if remaining > 10:
             st.markdown(f'<span class="timer-safe">⏱ {int(remaining)}秒</span>', unsafe_allow_html=True)
         elif remaining > 0:
             st.markdown(f'<span class="timer-warning">⏱ {int(remaining)}秒</span>', unsafe_allow_html=True)
 
-    # 检查是否结束
     if st.session_state.round > 3:
         st.info("3回合辩论结束！点击下方按钮查看复盘报告")
         if st.button("生成复盘报告", type="primary"):
             with st.spinner("AI正在生成评估报告..."):
                 report = generate_report(st.session_state.history, st.session_state.topic)
-            st.markdown(report)
+            if report == ERROR_MSG:
+                st.error(ERROR_MSG)
+            else:
+                st.markdown(report)
         return
 
-    # 显示当前回合
     if st.session_state.get("waiting_for_first_speech", False):
         st.info("请先陈述你的观点（作为立论），然后 AI 会反驳。")
     else:
-        st.markdown(
-            f'<div style="font-size:1.1rem; font-weight:600; margin:0.8rem 0 0.5rem 0;">第 {st.session_state.round}/3 回合</div>',
-            unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:1.1rem; font-weight:600; margin:0.8rem 0 0.5rem 0;">第 {st.session_state.round}/3 回合</div>', unsafe_allow_html=True)
 
-    # 显示对话历史
     for msg in st.session_state.messages:
         if msg["role"] == "user":
             st.chat_message("user").write(msg["content"])
@@ -859,12 +903,11 @@ def main():
                 gif_key = "sleepy"
             else:
                 gif_key = "computer"
-
+            
             avatar_path = KANSHAN_GIFS.get(gif_key, KANSHAN_GIFS["idle"])
             with st.chat_message("assistant", avatar=avatar_path):
                 st.write(msg["content"])
 
-    # 快捷回复建议
     if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] == "assistant":
         with st.expander("快捷回复建议（点击使用）"):
             with st.spinner("生成建议中..."):
@@ -883,13 +926,15 @@ def main():
                         st.session_state.get("debate_style", "逻辑严谨型")
                     )
                     for i, sug in enumerate(suggestions):
+                        if sug == ERROR_MSG:
+                            st.error(ERROR_MSG)
+                            break
                         if st.button(sug, key=f"quick_{i}", use_container_width=True):
                             st.session_state.quick_input = sug
                             st.rerun()
 
-    # 用户输入
     user_input = st.chat_input("输入你的观点或反驳...")
-
+    
     if "quick_input" in st.session_state and st.session_state.quick_input:
         user_input = st.session_state.quick_input
         st.session_state.quick_input = None
@@ -916,21 +961,21 @@ def main():
                 st.session_state.get("debate_style", "逻辑严谨型")
             )
 
-        st.session_state.messages.append({"role": "assistant", "content": ai_reply})
-        st.session_state.history.append({
-            "round": st.session_state.round,
-            "speaker": "AI",
-            "content": ai_reply
-        })
+        if ai_reply == ERROR_MSG:
+            st.error(ERROR_MSG)
+        else:
+            st.session_state.messages.append({"role": "assistant", "content": ai_reply})
+            st.session_state.history.append({
+                "round": st.session_state.round,
+                "speaker": "AI",
+                "content": ai_reply
+            })
 
-        st.session_state.round += 1
-        st.session_state.timer_start = None
-        st.session_state.timer_expired = False
-        st.rerun()
+            st.session_state.round += 1
+            st.session_state.timer_start = None
+            st.session_state.timer_expired = False
+            st.rerun()
 
-    # ========================================
-    # 底部
-    # ========================================
     st.markdown('<div class="footer">知乎黑客松 2026 · 知识炼金场</div>', unsafe_allow_html=True)
 
 
