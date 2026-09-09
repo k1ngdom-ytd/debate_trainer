@@ -10,8 +10,10 @@ from datetime import datetime
 # 启用缓存
 requests_cache.install_cache('zhihu_cache', expire_after=600)
 
-# ================== 请替换成你的真实 App_Key ==================
-APP_KEY = ""
+import streamlit as st
+
+# 优先从 Streamlit Secrets 读取，本地调试时从变量读取
+APP_KEY = st.secrets.get("APP_KEY", "你的本地测试密钥")
 # =============================================================
 
 # ---------- 模拟模式开关 ----------
