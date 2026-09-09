@@ -42,8 +42,8 @@
 
 ## 🚀 快速体验
 
-点击链接直接体验：  
-  👉 [https://github.com/k1ngdom-ytd/debate_trainer]
+点击链接在线体验：  
+  👉 [https://debatetrainer-dhmhyciesmlwhobcnth8gj.streamlit.app/]
 
 
 ---
